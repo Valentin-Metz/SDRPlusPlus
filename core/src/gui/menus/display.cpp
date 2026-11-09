@@ -28,6 +28,7 @@ namespace displaymenu {
     int fftSmoothingSpeed = 100;
     bool snrSmoothing = false;
     int snrSmoothingSpeed = 20;
+    int waterfallHistory = 2000;
 
     OptionList<int, int> fftSizes;
     OptionList<float, float> uiScales;
@@ -103,6 +104,13 @@ namespace displaymenu {
         snrSmoothingSpeed = core::configManager.conf["snrSmoothingSpeed"];
         gui::waterfall.setSNRSmoothing(snrSmoothing);
         updateFFTSpeeds();
+        if (core::configManager.conf.contains("waterfallHistory")) {
+            waterfallHistory = core::configManager.conf["waterfallHistory"];
+        }
+        else {
+            waterfallHistory = 2000;
+        }
+        gui::waterfall.setHistoryCapacity(waterfallHistory);
 
         // Define and load UI scales
         uiScales.define(1.0f, "100%", 1.0f);
@@ -210,6 +218,23 @@ namespace displaymenu {
             core::configManager.acquire();
             core::configManager.conf["fftRate"] = fftRate;
             core::configManager.release(true);
+        }
+
+        ImGui::LeftLabel("Waterfall History");
+        ImGui::SetNextItemWidth(menuWidth - ImGui::GetCursorPosX());
+        if (ImGui::InputInt("##sdrpp_waterfall_history", &waterfallHistory, 1000, 5000)) {
+            waterfallHistory = std::clamp<int>(waterfallHistory, 500, 50000);
+            gui::waterfall.setHistoryCapacity(waterfallHistory);
+            core::configManager.acquire();
+            core::configManager.conf["waterfallHistory"] = waterfallHistory;
+            core::configManager.release(true);
+        }
+        double estRamMB = ((double)waterfallHistory * (double)fftSizes.key(fftSizeId) * 4.0) / (1024.0 * 1024.0);
+        if (estRamMB >= 1024.0) {
+            ImGui::Text("History RAM: %.2f GB", estRamMB / 1024.0);
+        }
+        else {
+            ImGui::Text("History RAM: %.0f MB", estRamMB);
         }
 
         ImGui::LeftLabel("FFT Size");

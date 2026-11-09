@@ -132,6 +132,12 @@ namespace ImGui {
 
         void setFFTHeight(int height);
         int getFFTHeight();
+        void setHistoryCapacity(int capacity);
+        int getHistoryCapacity();
+        void resetScroll();
+        int getScrollOffset();
+        void setScrollOffset(int offset);
+        int getMaxScroll();
 
         void setRawFFTSize(int size);
 
@@ -281,7 +287,7 @@ namespace ImGui {
         float waterfallMin;
         float waterfallMax;
 
-        //std::vector<std::vector<float>> rawFFTs;
+        // std::vector<std::vector<float>> rawFFTs;
         int rawFFTSize;
         float* rawFFTs = NULL;
         float* latestFFT = NULL;
@@ -289,6 +295,10 @@ namespace ImGui {
         float* smoothingBuf = NULL;
         int currentFFTLine = 0;
         int fftLines = 0;
+        int historyCapacity = 2000;
+        int rawFFTCapacity = 2000;
+        int scrollOffset = 0;
+        int totalHistoryLines = 0;
 
         uint32_t* waterfallFb;
 

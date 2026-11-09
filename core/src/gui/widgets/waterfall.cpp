@@ -106,6 +106,10 @@ namespace ImGui {
         latestFFT = new float[dataWidth];
         latestFFTHold = new float[dataWidth];
         waterfallFb = new uint32_t[1];
+        historyCapacity = 2000;
+        rawFFTCapacity = 2000;
+        scrollOffset = 0;
+        totalHistoryLines = 0;
 
         viewBandwidth = 1.0;
         wholeBandwidth = 1.0;
@@ -214,9 +218,8 @@ namespace ImGui {
             std::lock_guard<std::mutex> lck(texMtx);
             window->DrawList->AddImage((void*)(intptr_t)textureId, wfMin, wfMax);
         }
-        
-        ImVec2 mPos = ImGui::GetMousePos();
 
+        ImVec2 mPos = ImGui::GetMousePos();
         if (IS_IN_AREA(mPos, wfMin, wfMax) && !gui::mainWindow.lockWaterfallControls && !inputHandled) {
             for (auto const& [name, vfo] : vfos) {
                 window->DrawList->AddRectFilled(vfo->wfRectMin, vfo->wfRectMax, vfo->color);
@@ -303,7 +306,6 @@ namespace ImGui {
                 targetFound = true;
             }
         }
-
         // If mouse was clicked inside the central part, check what was clicked
         if (mouseClicked && !targetFound) {
             mouseDownPos = mousePos;
@@ -423,13 +425,21 @@ namespace ImGui {
                 centerFreq += freqOffset;
                 centerFreqMoved = true;
             }
-
             lowerFreq = (centerFreq + viewOffset) - (viewBandwidth / 2.0);
             upperFreq = (centerFreq + viewOffset) + (viewBandwidth / 2.0);
 
             if (viewBandwidth != wholeBandwidth) {
                 updateAllVFOs();
                 if (_fullUpdate) { updateWaterfallFb(); };
+            }
+            return;
+        }
+        if (mouseWheel != 0 && mouseInWaterfall) {
+            int maxScroll = std::max<int>(0, totalHistoryLines - waterfallHeight);
+            if (maxScroll > 0) {
+                scrollOffset += (int)(mouseWheel * 25.0f);
+                scrollOffset = std::clamp<int>(scrollOffset, 0, maxScroll);
+                updateWaterfallFb();
             }
             return;
         }
@@ -608,12 +618,14 @@ namespace ImGui {
         float* tempData = new float[dataWidth];
         float pixel;
         float dataRange = waterfallMax - waterfallMin;
-        int count = std::min<float>(waterfallHeight, fftLines);
-        if (rawFFTs != NULL && fftLines >= 0) {
+        int available = std::max<int>(0, totalHistoryLines - scrollOffset);
+        int count = std::min<int>(waterfallHeight, available);
+        if (rawFFTs != NULL && count > 0) {
             for (int i = 0; i < count; i++) {
                 drawDataSize = (viewBandwidth / wholeBandwidth) * rawFFTSize;
                 drawDataStart = (((double)rawFFTSize / 2.0) * (offsetRatio + 1)) - (drawDataSize / 2);
-                doZoom(drawDataStart, drawDataSize, rawFFTSize, dataWidth, &rawFFTs[((i + currentFFTLine) % waterfallHeight) * rawFFTSize], tempData);
+                int lineIdx = ((currentFFTLine + scrollOffset + i) % rawFFTCapacity);
+                doZoom(drawDataStart, drawDataSize, rawFFTSize, dataWidth, &rawFFTs[lineIdx * rawFFTSize], tempData);
                 for (int j = 0; j < dataWidth; j++) {
                     pixel = (std::clamp<float>(tempData[j], waterfallMin, waterfallMax) - waterfallMin) / dataRange;
                     waterfallFb[(i * dataWidth) + j] = waterfallPallet[(int)(pixel * (WATERFALL_RESOLUTION - 1))];
@@ -737,23 +749,19 @@ namespace ImGui {
 
         if (waterfallVisible) {
             // Raw FFT resize
-            fftLines = std::min<int>(fftLines, waterfallHeight) - 1;
-            if (rawFFTs != NULL) {
-                if (currentFFTLine != 0) {
-                    float* tempWF = new float[currentFFTLine * rawFFTSize];
-                    int moveCount = lastWaterfallHeight - currentFFTLine;
-                    memcpy(tempWF, rawFFTs, currentFFTLine * rawFFTSize * sizeof(float));
-                    memmove(rawFFTs, &rawFFTs[currentFFTLine * rawFFTSize], moveCount * rawFFTSize * sizeof(float));
-                    memcpy(&rawFFTs[moveCount * rawFFTSize], tempWF, currentFFTLine * rawFFTSize * sizeof(float));
-                    delete[] tempWF;
-                }
+            int oldCapacity = rawFFTCapacity;
+            rawFFTCapacity = std::max<int>(std::max<int>(1, waterfallHeight), historyCapacity);
+            if (rawFFTs == NULL) {
+                rawFFTs = (float*)malloc(rawFFTCapacity * rawFFTSize * sizeof(float));
+                memset(rawFFTs, 0, rawFFTCapacity * rawFFTSize * sizeof(float));
                 currentFFTLine = 0;
-                rawFFTs = (float*)realloc(rawFFTs, waterfallHeight * rawFFTSize * sizeof(float));
+                totalHistoryLines = 0;
+                scrollOffset = 0;
             }
-            else {
-                rawFFTs = (float*)malloc(waterfallHeight * rawFFTSize * sizeof(float));
+            else if (rawFFTCapacity != oldCapacity) {
+                rawFFTs = (float*)realloc(rawFFTs, rawFFTCapacity * rawFFTSize * sizeof(float));
             }
-            // ==============
+            scrollOffset = std::min<int>(scrollOffset, std::max<int>(0, totalHistoryLines - waterfallHeight));
         }
 
         // Reallocate display FFT
@@ -773,7 +781,7 @@ namespace ImGui {
             if (smoothingBuf) { delete[] smoothingBuf; }
             smoothingBuf = new float[dataWidth];
             for (int i = 0; i < dataWidth; i++) {
-                smoothingBuf[i] = -1000.0f; 
+                smoothingBuf[i] = -1000.0f;
             }
         }
 
@@ -831,7 +839,7 @@ namespace ImGui {
             onResize();
         }
 
-        //window->DrawList->AddRectFilled(widgetPos, widgetEndPos, IM_COL32( 0, 0, 0, 255 ));
+        // window->DrawList->AddRectFilled(widgetPos, widgetEndPos, IM_COL32( 0, 0, 0, 255 ));
         ImU32 bg = ImGui::ColorConvertFloat4ToU32(gui::themeManager.waterfallBg);
         window->DrawList->AddRectFilled(widgetPos, widgetEndPos, bg);
         window->DrawList->AddRect(widgetPos, widgetEndPos, IM_COL32(50, 50, 50, 255), 0.0, 0, style::uiScale);
@@ -878,9 +886,11 @@ namespace ImGui {
         buf_mtx.lock();
         if (waterfallVisible) {
             currentFFTLine--;
-            fftLines++;
-            currentFFTLine = ((currentFFTLine + waterfallHeight) % waterfallHeight);
-            fftLines = std::min<float>(fftLines, waterfallHeight);
+            currentFFTLine = (currentFFTLine + rawFFTCapacity) % rawFFTCapacity;
+            if (totalHistoryLines < rawFFTCapacity) {
+                totalHistoryLines++;
+            }
+            fftLines = totalHistoryLines;
             return &rawFFTs[currentFFTLine * rawFFTSize];
         }
         return rawFFTs;
@@ -895,15 +905,23 @@ namespace ImGui {
 
         if (waterfallVisible) {
             doZoom(drawDataStart, drawDataSize, rawFFTSize, dataWidth, &rawFFTs[currentFFTLine * rawFFTSize], latestFFT);
-            memmove(&waterfallFb[dataWidth], waterfallFb, dataWidth * (waterfallHeight - 1) * sizeof(uint32_t));
-            float pixel;
-            float dataRange = waterfallMax - waterfallMin;
-            for (int j = 0; j < dataWidth; j++) {
-                pixel = (std::clamp<float>(latestFFT[j], waterfallMin, waterfallMax) - waterfallMin) / dataRange;
-                int id = (int)(pixel * (WATERFALL_RESOLUTION - 1));
-                waterfallFb[j] = waterfallPallet[id];
+            if (scrollOffset == 0) {
+                memmove(&waterfallFb[dataWidth], waterfallFb, dataWidth * (waterfallHeight - 1) * sizeof(uint32_t));
+                float pixel;
+                float dataRange = waterfallMax - waterfallMin;
+                for (int j = 0; j < dataWidth; j++) {
+                    pixel = (std::clamp<float>(latestFFT[j], waterfallMin, waterfallMax) - waterfallMin) / dataRange;
+                    int id = (int)(pixel * (WATERFALL_RESOLUTION - 1));
+                    waterfallFb[j] = waterfallPallet[id];
+                }
+                waterfallUpdate = true;
             }
-            waterfallUpdate = true;
+            else {
+                int maxScroll = std::max<int>(0, totalHistoryLines - waterfallHeight);
+                if (scrollOffset < maxScroll) {
+                    scrollOffset++;
+                }
+            }
         }
         else {
             doZoom(drawDataStart, drawDataSize, rawFFTSize, dataWidth, rawFFTs, latestFFT);
@@ -924,7 +942,7 @@ namespace ImGui {
             if (snrSmoothing) {
                 float newSNR = 0.0f;
                 calculateVFOSignalInfo(waterfallVisible ? &rawFFTs[currentFFTLine * rawFFTSize] : rawFFTs, vfos[selectedVFO], dummy, newSNR);
-                selectedVFOSNR = (snrSmoothingBeta*selectedVFOSNR) + (snrSmoothingAlpha*newSNR);
+                selectedVFOSNR = (snrSmoothingBeta * selectedVFOSNR) + (snrSmoothingAlpha * newSNR);
             }
             else {
                 calculateVFOSignalInfo(waterfallVisible ? &rawFFTs[currentFFTLine * rawFFTSize] : rawFFTs, vfos[selectedVFO], dummy, selectedVFOSNR);
@@ -1134,15 +1152,18 @@ namespace ImGui {
     void WaterFall::setRawFFTSize(int size) {
         std::lock_guard<std::recursive_mutex> lck(buf_mtx);
         rawFFTSize = size;
-        int wfSize = std::max<int>(1, waterfallHeight);
+        rawFFTCapacity = std::max<int>(std::max<int>(1, waterfallHeight), historyCapacity);
         if (rawFFTs != NULL) {
-            rawFFTs = (float*)realloc(rawFFTs, rawFFTSize * wfSize * sizeof(float));
+            rawFFTs = (float*)realloc(rawFFTs, rawFFTSize * rawFFTCapacity * sizeof(float));
         }
         else {
-            rawFFTs = (float*)malloc(rawFFTSize * wfSize * sizeof(float));
+            rawFFTs = (float*)malloc(rawFFTSize * rawFFTCapacity * sizeof(float));
         }
         fftLines = 0;
-        memset(rawFFTs, 0, rawFFTSize * waterfallHeight * sizeof(float));
+        totalHistoryLines = 0;
+        currentFFTLine = 0;
+        scrollOffset = 0;
+        memset(rawFFTs, 0, rawFFTSize * rawFFTCapacity * sizeof(float));
         updateWaterfallFb();
     }
 
@@ -1168,7 +1189,7 @@ namespace ImGui {
         fftSmoothing = enabled;
 
         // Free buffer if not null
-        if (smoothingBuf) {delete[] smoothingBuf; }
+        if (smoothingBuf) { delete[] smoothingBuf; }
 
         // If disabled, stop here
         if (!enabled) {
@@ -1388,7 +1409,12 @@ namespace ImGui {
         }
         waterfallVisible = true;
         onResize();
-        memset(rawFFTs, 0, waterfallHeight * rawFFTSize * sizeof(float));
+        if (rawFFTs != NULL) {
+            memset(rawFFTs, 0, rawFFTCapacity * rawFFTSize * sizeof(float));
+        }
+        currentFFTLine = 0;
+        totalHistoryLines = 0;
+        scrollOffset = 0;
         updateWaterfallFb();
         buf_mtx.unlock();
     }
@@ -1418,6 +1444,49 @@ namespace ImGui {
 
     void WaterFall::hideBandplan() {
         bandplanVisible = false;
+    }
+
+    void WaterFall::setHistoryCapacity(int capacity) {
+        std::lock_guard<std::recursive_mutex> lck(buf_mtx);
+        historyCapacity = std::clamp<int>(capacity, 500, 50000);
+        int newCap = std::max<int>(std::max<int>(1, waterfallHeight), historyCapacity);
+        if (newCap != rawFFTCapacity) {
+            rawFFTCapacity = newCap;
+            if (rawFFTs != NULL) {
+                rawFFTs = (float*)realloc(rawFFTs, rawFFTCapacity * rawFFTSize * sizeof(float));
+            }
+            totalHistoryLines = std::min<int>(totalHistoryLines, rawFFTCapacity);
+            scrollOffset = std::min<int>(scrollOffset, std::max<int>(0, totalHistoryLines - waterfallHeight));
+            updateWaterfallFb();
+        }
+    }
+
+    int WaterFall::getHistoryCapacity() {
+        return historyCapacity;
+    }
+
+    void WaterFall::resetScroll() {
+        std::lock_guard<std::recursive_mutex> lck(buf_mtx);
+        scrollOffset = 0;
+        updateWaterfallFb();
+    }
+
+    int WaterFall::getScrollOffset() {
+        return scrollOffset;
+    }
+
+    void WaterFall::setScrollOffset(int offset) {
+        std::lock_guard<std::recursive_mutex> lck(buf_mtx);
+        int maxScroll = std::max<int>(0, totalHistoryLines - waterfallHeight);
+        int clamped = std::clamp<int>(offset, 0, maxScroll);
+        if (clamped != scrollOffset) {
+            scrollOffset = clamped;
+            updateWaterfallFb();
+        }
+    }
+
+    int WaterFall::getMaxScroll() {
+        return std::max<int>(0, totalHistoryLines - waterfallHeight);
     }
 
     void WaterfallVFO::setSnapInterval(double interval) {
