@@ -577,7 +577,7 @@ void MainWindow::draw() {
 
         // Handle scrollwheel
         int wheel = ImGui::GetIO().MouseWheel;
-        if (wheel != 0 && (gui::waterfall.mouseInFFT || gui::waterfall.mouseInWaterfall)) {
+        if (wheel != 0 && gui::waterfall.mouseInFFT) {
             double nfreq;
             if (vfo != NULL) {
                 // Select factor depending on modifier keys
@@ -653,6 +653,63 @@ void MainWindow::draw() {
         core::configManager.acquire();
         core::configManager.conf["min"] = fftMin;
         core::configManager.release(true);
+    }
+
+    ImGui::NewLine();
+
+    ImGui::SetCursorPosX((ImGui::GetWindowSize().x / 2.0) - (ImGui::CalcTextSize("Hist").x / 2.0));
+    ImGui::TextUnformatted("Hist");
+    ImGui::SetCursorPosX((ImGui::GetWindowSize().x / 2.0) - 10 * style::uiScale);
+    int curScroll = gui::waterfall.getScrollOffset();
+    int maxScroll = gui::waterfall.getMaxScroll();
+    bool hasHistory = (maxScroll > 0);
+
+    if (!hasHistory) {
+        style::beginDisabled();
+    }
+
+    int sliderVal = curScroll;
+    ImGui::SetItemUsingMouseWheel();
+    if (ImGui::VSliderInt("##_hist_scroll_", wfSliderSize, &sliderVal, hasHistory ? maxScroll : 0, 0, "")) {
+        if (hasHistory) {
+            gui::waterfall.setScrollOffset(sliderVal);
+        }
+    }
+
+    if (!hasHistory) {
+        style::endDisabled();
+    }
+
+    if (curScroll == 0) {
+        ImGui::SetCursorPosX((ImGui::GetWindowSize().x / 2.0) - (ImGui::CalcTextSize("LIVE").x / 2.0));
+        if (hasHistory) {
+            ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.2f, 1.0f), "LIVE");
+        }
+        else {
+            ImGui::TextDisabled("LIVE");
+        }
+    }
+    else {
+        char buf[32];
+        int rate = 20;
+        if (core::configManager.conf.contains("fftRate")) {
+            rate = std::max<int>(1, (int)core::configManager.conf["fftRate"]);
+        }
+        float secs = (float)curScroll / (float)rate;
+        if (secs < 60.0f) {
+            snprintf(buf, sizeof(buf), "-%.1fs", secs);
+        }
+        else {
+            snprintf(buf, sizeof(buf), "-%.1fm", secs / 60.0f);
+        }
+        ImVec2 txtSz = ImGui::CalcTextSize(buf);
+        ImGui::SetCursorPosX((ImGui::GetWindowSize().x / 2.0) - (txtSz.x / 2.0));
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", buf);
+
+        ImGui::SetCursorPosX((ImGui::GetWindowSize().x / 2.0) - (ImGui::CalcTextSize("Live").x / 2.0) - ImGui::GetStyle().FramePadding.x);
+        if (ImGui::SmallButton("Live##_snap_live")) {
+            gui::waterfall.resetScroll();
+        }
     }
 
     ImGui::EndChild();
